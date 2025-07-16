@@ -5,9 +5,9 @@ This project analyzes the gender wage gap in the U.S. using CPS ASEC microdata f
 ## Project Structure
 
 - `2019-2024 Project.Rmd`: Main RMarkdown report
-- `cpsmar_2024-2019.R`: Data wrangling and prep script
-- `/data`: Contains CPS microdata 
-- `/outputs`: Includes tidied CPS and Labor Force csvs for each year
+- `cpsmar_2024-2019.R` *(not included)*: Data wrangling and prep script
+- `/data` *(not included)*: Contains CPS microdata 
+- `/outputs` *(not included)*: Includes tidied CPS and Labor Force csvs for each year
 - `Gender Wage Gap Project.pbix`: Interactive Power BI dashboard
 - `README.md`: This file
 
