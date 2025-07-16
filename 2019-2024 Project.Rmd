@@ -1,0 +1,1225 @@
+---
+title: "Changes in the Gender Wage Gap, 2019–2024"
+subtitle: "A Data-Driven Analysis of Gender Wage Disparities Using CPS Data" 
+author: "Bradley DePanfilis"
+date: | 
+    | Summer 2025 
+output: 
+  ioslides_presentation:
+    css: css/project_slidedeck.css
+    toc: false
+    widescreen: true
+---
+
+```{r Setup, include=FALSE}
+library(here)          # For simple handling of relative file paths
+library(tidyverse)     # To use the tidy packages
+library(modelsummary)  # To make pretty tables
+library(ggpmisc)       # To annotate plot fits
+library(car)           # For `linearHypothesis`
+library(ggrepel)       # For text annotations
+library(kableExtra)    # For table formatting
+library(ggplot2)
+library(ggridges)
+library(dplyr)
+library(cowplot)
+library(broom)
+library (htmltools)
+library(knitr)
+library(patchwork)
+
+# Global options
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  warning = FALSE,
+  message = FALSE
+  )
+
+options(scipen=999)
+
+options(modelsummary_html = list(
+  "html" = list(
+    "table.css" = "width: 100%; font-size: 8px;"  # Width and font size 
+  )
+))
+options(datasummary_html = list(
+  "html" = list(
+    "table.css" = "width: 100%; font-size: 8px;"  # Width and font size 
+  )
+))
+```
+
+<!----------------------------------------------------------------------------->
+
+## Overview
+
+This project examines the gender wage gap using March CPS data from **2019 to 2024**, focusing on **full-time workers aged 23 to 62 with positive earnings**. It analyzes differences in `earnings levels` and `wage growth` between men and women, particularly how these disparities **evolve over the course of a career** and respond to various adjustments. By sequentially controlling for `education`, `demographics`, and `household responsibilities`, the analysis highlights the **persistence and complexity** of the wage gap. While some differences are explained by measurable factors, a **substantial portion remains unexplained**, pointing to the role of **structural inequalities** in shaping labor market outcomes by gender.
+
+
+<!----------------------------------------------------------------------------->
+<!----------------------------------------------------------------------------->
+
+# Data
+
+<!----------------------------------------------------------------------------->
+
+## March 2019-2024 CPS 
+
+The March 2019–2024 CPS ASEC includes data from `322,345` surveyed households. While the standard monthly CPS collects labor force and demographic information and serves as the official source for employment statistics, the ASEC supplement adds data on `income`, `work experience`, and `educational attainment`. Analyzing the March CPS across these six years enables the **identification of meaningful trends and changes** in labor market outcomes and related characteristics.
+ 
+ 
+## March 2019-2024 CPS Extract 
+
+```{r March 2019-2024 CPS Extract, eval=TRUE}
+years <- 2019:2024
+cps_list <- lapply(years, function(y) {
+  cps <- read_csv(here("outputs", as.character(y), "cpsmar_e.csv"))
+  cps$year <- y
+  cps
+})
+cpsmar_e <- bind_rows(cps_list)
+```
+
+I selected age, gender, race, Hispanic origin, marital status, education, hours, weeks, and earnings from the person file, and region, county, and metro area status from the household file. Using `rename` and `mutate`, I simplified variable names and created indicators for gender, education, and full-time work. I merged the files and used `group_by` to flag households with children under 6. I then applied `filter` to keep only full-time workers. The final dataset includes **322,345** observations and **21** variables.
+
+
+## Analysis sample 
+
+```{r Analysis Sample, eval = TRUE}
+# Record the original number of rows across all years
+n_original <- nrow(cpsmar_e)
+
+#Apply restrictions and create analysis sample
+cpsmar_a <- cpsmar_e %>%
+  filter(
+    age >= 23, 
+    age <= 62,
+    earnings > 0
+  ) %>%
+  mutate(
+    gender = ifelse(female == 1, "Female", "Male"),
+    wage = earnings/(hours * weeks), 
+    lwage = log(wage),
+    Black = case_when(race== 2 ~ 1, TRUE ~ 0),
+    south = case_when(region== 3 ~ 1, TRUE ~ 0),
+    married = case_when((marital== 1 | marital== 2 | marital== 3)~1, TRUE ~ 0),
+    age_centered = age - 23
+  )
+
+#Record the number of rows after filtering
+n_filtered <- nrow(cpsmar_a)
+```
+
+Restricting the data set to individuals aged 23 to 62 with positive earnings reduced the original `r n_original` observations to `r n_filtered` in the analysis sample. This represents a `r round((n_filtered - n_original) / n_original * 100, 1)`% change. 
+<!----------------------------------------------------------------------------->
+<!----------------------------------------------------------------------------->  
+
+# Baseline Earnings Distributions   
+
+
+## Trends in Average Earnings and the Gender Pay Gap
+
+```{r Plotting Earnings Distribution with Table and Graph, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=8, fig.cap="Figure 1. Average earnings by gender with dollar and percent gaps, 2019–2024."}
+
+# Calculate average earnings by year and gender
+earnings_fvm <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarize(avg_earnings = round(mean(earnings, na.rm = TRUE), 0), .groups = "drop")
+
+# Calculate average earnings per year and gender
+earnings_avg_year <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarise(avg_earnings = round(mean(earnings, na.rm=TRUE), 0), .groups="drop")  # round to nearest whole dollar
+
+# Pivot wide to get Female and Male columns
+earnings_wide <- earnings_avg_year %>%
+  tidyr::pivot_wider(names_from=gender, values_from=avg_earnings) %>%
+  mutate(
+    year_num = as.numeric(as.character(year)),
+    gap = round(Male - Female, 0),  # round gap to whole number
+    pct_gap = round(100 * gap / Female, 1)
+  )
+
+# Long format for plotting lines
+earnings_long <- earnings_avg_year %>%
+  mutate(year_num = as.numeric(as.character(year))) %>%
+  rename(Earnings = avg_earnings, Gender = gender)
+
+# --- TABLE ---
+styled_tbl <- earnings_wide %>%
+  select(-year_num) %>%
+  mutate(year = as.character(year)) %>%
+  knitr::kable(
+    caption = "Table 1. Average earnings and gender gap by year",
+    col.names = c("Year", "Female Earnings", "Male Earnings", "Gap ($)", "Gap (%)"),
+    format.args = list(big.mark = ","),
+    escape = FALSE,
+    align = "lrrrr",
+    format = "html"
+  ) %>%
+  kableExtra::kable_styling(
+    full_width = FALSE,
+    position = "center",
+    font_size = 16
+  )
+
+# Inject class="kable" manually so CSS applies
+styled_tbl <- gsub("<table", "<table class='kable'", styled_tbl)
+
+# Add CSS for spacing and borders
+styled_tbl <- paste0(
+  "<style>
+    table.kable {
+      border-collapse: collapse;
+      width: auto;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    table.kable th, table.kable td {
+      border-bottom: 1px solid #ccc;
+      padding: 10px 20px;
+      min-width: 100px;
+      white-space: nowrap;
+      text-align: right;
+    }
+    table.kable th:first-child, table.kable td:first-child {
+      text-align: left;
+    }
+    caption {
+      caption-side: top;
+      text-align: center;
+      font-weight: bold;
+      padding: 10px;
+    }
+  </style>",
+  styled_tbl
+)
+
+knitr::asis_output(styled_tbl)
+```
+
+
+## **Visualizing Gender Differences in Earnings Over Time**
+
+```{r Plot Dollar Gap, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+ggplot() +
+  geom_ribbon(data=earnings_wide, aes(x=year_num, ymin=Female, ymax=Male), fill="lightblue", alpha=0.3) +
+
+  # Male & Female lines
+  geom_line(data=earnings_long, aes(x=year_num, y=Earnings, color=Gender), size=1) +
+  geom_point(data=earnings_long, aes(x=year_num, y=Earnings, color=Gender), size=2) +
+  geom_text(data=earnings_long, aes(x=year_num, y=Earnings, label=scales::dollar(Earnings, accuracy=1)), 
+            vjust=-0.7, size=3) +
+
+  # Dollar gap line 
+  geom_line(data=earnings_wide, aes(x=year_num, y=gap, color="Dollar Gap"), linetype="dotted", size=1) +
+  geom_point(data=earnings_wide, aes(x=year_num, y=gap, color="Dollar Gap"), size=2) +
+  geom_text(data=earnings_wide, aes(x=year_num, y=gap, label=scales::dollar(gap, accuracy=1)), 
+            vjust=1.5, size=2.7, color="black") +
+
+  # X and Y axis
+  scale_x_continuous(breaks=earnings_wide$year_num, labels=earnings_wide$year) +
+  scale_y_continuous(name="Earnings and Dollar Gap ($)", labels=scales::dollar_format(accuracy=1)) +
+
+  # Color legend
+  scale_color_manual(
+    values = c("Female"="#e78ac3", "Male"="#4eb3d3", "Dollar Gap"="black"),
+    name = "Legend"
+  ) +
+
+  labs(
+    title="Figure 1. Average Earnings by Gender with Dollar Gap (2019–2024)",
+    x="Year"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+```
+
+
+## **Visualizing Gender Earnings Trends and Percent Gap**
+
+```{r Plot Percent Gap, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Percent gap line
+earnings_wide <- earnings_wide %>%
+  mutate(pct_gap_scaled = pct_gap * 1000)
+
+ggplot() +
+  geom_ribbon(data=earnings_wide, aes(x=year_num, ymin=Female, ymax=Male), fill="lightblue", alpha=0.3) +
+
+  # Male & Female lines
+  geom_line(data=earnings_long, aes(x=year_num, y=Earnings, color=Gender), size=1) +
+  geom_point(data=earnings_long, aes(x=year_num, y=Earnings, color=Gender), size=2) +
+  geom_text(data=earnings_long, aes(x=year_num, y=Earnings, label=scales::dollar(Earnings, accuracy=1)), 
+            vjust=-0.7, size=3) +
+
+  # Percent gap (scaled)
+  geom_line(data=earnings_wide, aes(x=year_num, y=pct_gap_scaled, color="Percent Gap"), 
+            linetype="dashed", size=1) +
+  geom_point(data=earnings_wide, aes(x=year_num, y=pct_gap_scaled, color="Percent Gap"), size=2) +
+  geom_text(data=earnings_wide, aes(x=year_num, y=pct_gap_scaled, label=paste0(pct_gap, "%")), 
+            vjust=1.5, size=2.7, color="black") +
+
+  scale_x_continuous(breaks=earnings_wide$year_num, labels=earnings_wide$year) +
+  scale_y_continuous(
+    name="Average Earnings ($)", 
+    labels=scales::dollar_format(accuracy=1),
+    sec.axis=sec_axis(~./1000, name="Gender Gap (%)")
+  ) +
+  scale_color_manual(
+    values = c("Female"="#e78ac3", "Male"="#4eb3d3", "Percent Gap"="black"),
+    name = "Legend"
+  ) +
+
+  labs(
+    title="Figure 2. Average Earnings by Gender with Percent Gap (2019–2024)",
+    x="Year"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+```
+
+
+## Explaining Earnings and Gaps
+
+From 2019 to 2024, **average earnings increased** for both genders: women’s rose from `$58,542` to `$75,026`, and men’s from `$76,794` to `$94,269`. The **dollar gap** remained steady at around `$19,000`, but the **percent gap** declined from `31.2% to 25.6%`, showing that women gained ground proportionally.
+
+Still, the persistence of the earnings gap underscores **structural barriers** that continue to limit full wage equality.
+
+
+# Distribution of Earnings by Gender
+
+
+## Earnings Distribution by Gender and Year
+
+```{r Plotting Earnings Distributions by Year, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6, out.width="100%", fig.align="center"}
+# 1) Calculate averages by year and gender
+earnings_avg_year <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarize(avg_earnings=mean(earnings, na.rm=TRUE), .groups="drop")
+
+# 2) Compute max density y for each year
+max_density_y <- cpsmar_a %>%
+  group_by(year) %>%
+  summarise(y_max=max(density(earnings, na.rm=TRUE)$y))
+
+# 3) Compute gap per year (Male-Female)
+gap_by_year <- earnings_avg_year %>%
+  pivot_wider(names_from=gender, values_from=avg_earnings) %>%
+  mutate(
+    gap = Male - Female,
+    gap_scaled = scales::rescale(gap, to=c(0.1,0.4))  # scale gaps to reasonable spacing
+  )
+
+# 4) Merge with y_max, calculate same x but dynamic y spacing with minimum separation
+earnings_avg_year <- earnings_avg_year %>%
+  left_join(max_density_y, by="year") %>%
+  left_join(gap_by_year %>% select(year, gap), by="year") %>%
+  mutate(
+    gap_scaled = pmax(scales::rescale(gap, to=c(0.1,0.4)), 0.25),  # ensures at least 0.25 spacing
+    label_x=490000,
+    label_y= case_when(
+      gender=="Female" ~ y_max * (0.7 + gap_scaled/2),
+      gender=="Male" ~ y_max * (0.7 - gap_scaled/2)
+    ),
+    label= paste0(scales::dollar(round(avg_earnings,0)))
+  )
+
+# 5) Plot
+figure2 <- ggplot(cpsmar_a, aes(x=earnings, fill=gender)) +
+  geom_density(alpha=0.4, position="identity") +
+  geom_vline(
+    data=earnings_avg_year, 
+    aes(xintercept=avg_earnings, color=gender),
+    linetype="dashed", size=0.7, show.legend=FALSE
+  ) +
+  geom_text(
+    data=earnings_avg_year,
+    aes(x=label_x, y=label_y, label=label, color=gender),
+    angle=0, hjust=1, size=2.5, show.legend=FALSE
+  ) +
+  labs(
+    title="Figure 3. Distribution of earnings by gender and year (2019–2024)",
+    subtitle="Dashed lines show average earnings; vertical label spacing reflects earnings gap",
+    x="Earnings",
+    y="Density",
+    fill="Gender"
+  ) +
+  facet_wrap(~ year, scales="fixed") +
+  scale_x_continuous(
+    labels=scales::label_dollar(),
+    limits=c(0, 400000),
+    breaks=seq(0,400000,by=100000)
+  ) +
+  scale_fill_manual(values=c("Female"="#e78ac3", "Male"="#4eb3d3")) +
+  scale_color_manual(values=c("Female"="#e78ac3", "Male"="#4eb3d3")) +
+  theme_minimal() +
+  theme(axis.text.x=element_text(angle=45, hjust=1, size=6))  # smaller x-axis labels
+
+print(figure2)
+```
+
+
+## Earnings Distribution by Gender and Year
+
+Figure 3 displays the distribution of earnings by gender across 2019 to 2024. The distributions are **right-skewed**, with most workers earning lower amounts and a long tail toward high earners. Across all years, **both male and female distributions shift rightward**, indicating overall earnings growth. Dashed vertical lines represent average earnings, which consistently appear further right for men—signaling a **persistent earnings gap**. However, the narrowing distance between male and female averages suggests **gradual progress toward wage parity**.
+
+
+## Earnings Distributions by Gender: Violin Plots (2019–2024)
+
+```{r Violin Plot Earnings, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Create the earnings_avg_year data with labels
+earnings_avg_year <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarise(avg_earnings = mean(earnings, na.rm = TRUE), .groups = "drop") %>%
+  mutate(label = scales::dollar(avg_earnings, accuracy = 1))
+
+# Violin plot
+ggplot(cpsmar_a, aes(x = gender, y = earnings, fill = gender)) +
+  geom_violin(alpha = 0.4, scale = "width", trim = FALSE) +
+  geom_point(
+    data = earnings_avg_year,
+    aes(x = gender, y = avg_earnings, color = gender),
+    position = position_nudge(x = 0),
+    size = 1.5,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    data = earnings_avg_year,
+    aes(x = gender, y = avg_earnings, label = label, color = gender),
+    vjust = -0.7,
+    size = 2.5,
+    show.legend = FALSE
+  ) +
+  labs(
+    title = "Figure 4. Violin Plots of Earnings by Gender and Year (2019–2024)",
+    subtitle = "Violin width shows earnings distribution; points and labels show mean earnings",
+    x = "Gender",
+    y = "Earnings",
+    fill = "Gender"
+  ) +
+  facet_wrap(~ year, scales = "fixed") +
+  scale_y_continuous(
+    labels = scales::label_dollar(),
+    limits = c(0, 400000),
+    breaks = seq(0, 400000, by = 100000)
+  ) +
+  scale_fill_manual(values = c("Female" = "#e78ac3", "Male" = "#4eb3d3")) +
+  scale_color_manual(values = c("Female" = "#e78ac3", "Male" = "#4eb3d3")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 8))
+```
+
+
+## Ridge Plots of Earnings Distributions by Gender and Year (2019–2024)
+
+```{r Ridge Plot Earnings, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Ridge plot of earnings distributions across years, faceted by gender
+ggplot(cpsmar_a, aes(x = earnings, y = factor(year), fill = gender)) +
+  geom_density_ridges(
+    alpha = 0.4,
+    scale = 2,
+    rel_min_height = 0.01,
+    color = "white"
+  ) +
+  labs(
+    title = "Figure 5. Ridge Plots of Earnings Distributions by Year and Gender (2019–2024)",
+    subtitle = "Each ridge shows the earnings distribution for men and women each year; rightward shifts indicate growing earnings.",
+    x = "Earnings",
+    y = "Year",
+    fill = "Gender"
+  ) +
+  scale_x_continuous(
+    labels = scales::label_dollar(),
+    limits = c(0, 400000),
+    breaks = seq(0, 400000, by = 100000)
+  ) +
+  scale_fill_manual(values = c("Female" = "#e78ac3", "Male" = "#4eb3d3")) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+
+## Explaining Violin and Ridge Plots
+
+Both the violin and ridge plots show **right-skewed earnings distributions** across genders and years. The violin plots highlight that while median earnings have risen since 2019, distributions remain skewed—**especially for men**, whose long right tails suggest a small group of very high earners. 
+
+The ridge plots offer clearer year-to-year comparisons: **earnings for both genders shift rightward**, reflecting growth, but male distributions remain wider and further extended. Although the **gap between male and female distribution peaks narrows**, male earnings still show greater variance. 
+
+These visualizations underscore that despite rising averages, **earnings inequality persists**, driven by structural differences in distribution.
+
+
+## Baseline Comparisons Takeaways
+
+From 2019 to 2024, **average earnings increased** for both men and women, and distributions **shifted rightward**, signaling overall economic growth. Despite this, **men consistently earned more**, and their distributions were **more right-skewed**, reflecting a higher share of top earners.
+
+While the **dollar gap** slightly widened, the **percentage gap narrowed** from `31.2% to 25.6%`, indicating modest relative progress. Still, the underlying **distribution shapes remained skewed**, suggesting persistent structural differences in earnings.
+
+
+# The career gender gap
+
+
+## Gender Differences in Wages and Hours (2019–2024)
+
+```{r Summary Table Wages and Hours, echo=FALSE, results='asis', eval=TRUE, message=FALSE, warning=FALSE}
+
+# Summarize the data
+summary_df <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarise(
+    Mean_Wage = round(mean(wage, na.rm = TRUE), 2),
+    Mean_Hours = round(mean(hours, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = gender,
+    values_from = c(Mean_Wage, Mean_Hours)
+  ) %>%
+  mutate(
+    Wage_Diff = round(Mean_Wage_Male - Mean_Wage_Female, 2),
+    Wage_Gap_Pct = round(100 * (Wage_Diff / Mean_Wage_Female), 2),
+    Hours_Diff = round(Mean_Hours_Male - Mean_Hours_Female, 2)
+  ) %>%
+  select(
+    year,
+    Mean_Wage_Female, Mean_Wage_Male, Wage_Diff, Wage_Gap_Pct,
+    Mean_Hours_Female, Mean_Hours_Male, Hours_Diff
+  ) %>%
+  mutate(year = as.character(year))
+
+# Define column names
+col_names <- c(
+  "Year", "Female Wage", "Male Wage", "Wage Gap ($)", "Wage Gap (%)",
+  "Female Hours", "Male Hours", "Hours Diff"
+)
+
+# Generate styled table
+summary_df %>%
+  kable(
+    format = "html",
+    col.names = col_names,
+    caption = "Table 2. Summary of hourly wages, wage gaps, and hours worked by gender, 2019–2024",
+    align = "lrrrrrrr",
+    escape = TRUE
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    font_size = 16,
+    bootstrap_options = c("striped", "condensed")
+  ) %>%
+  row_spec(0, bold = TRUE) %>%     # Header bold
+  row_spec(1:nrow(summary_df), hline_after = TRUE) %>%  # horizontal lines
+  column_spec(2:8, width = "120px", extra_css = "text-align: right;")
+```
+
+
+## Hourly Wage Trends and Gender Gaps (2019–2024)
+
+```{r Plot Mean Hourly Wage, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Create numeric version of year
+years_unique <- sort(unique(as.numeric(summary_df$year)))
+
+# Prepare data
+plot_data <- summary_df %>%
+  mutate(
+    year_num = as.numeric(year),
+    Wage_Gap_Diff = Wage_Diff
+  )
+
+# Plot mean hourly wage and wage gap
+ggplot() +
+  # Wage lines
+  geom_line(data = plot_data, aes(x = year_num, y = Mean_Wage_Female, color = "Female"), size = 1) +
+  geom_line(data = plot_data, aes(x = year_num, y = Mean_Wage_Male, color = "Male"), size = 1) +
+  geom_point(data = plot_data, aes(x = year_num, y = Mean_Wage_Female, color = "Female"), size = 2) +
+  geom_point(data = plot_data, aes(x = year_num, y = Mean_Wage_Male, color = "Male"), size = 2) +
+  geom_text(data = plot_data, aes(x = year_num, y = Mean_Wage_Female, label = round(Mean_Wage_Female, 2)), vjust = -0.5, size = 3) +
+  geom_text(data = plot_data, aes(x = year_num, y = Mean_Wage_Male, label = round(Mean_Wage_Male, 2)), vjust = -0.5, size = 3) +
+
+  # Wage gap line
+  geom_line(data = plot_data, aes(x = year_num, y = Wage_Gap_Diff, color = "Hourly Wage Gap"), linetype = "dotted", size = 1) +
+  geom_point(data = plot_data, aes(x = year_num, y = Wage_Gap_Diff, color = "Hourly Wage Gap"), size = 2) +
+  geom_text(data = plot_data, aes(x = year_num, y = Wage_Gap_Diff, label = paste0("$", Wage_Gap_Diff)), vjust = 1.5, size = 3) +
+
+  # Labels and theme
+  scale_color_manual(
+    values = c("Female" = "#e78ac3", "Male" = "#4eb3d3", "Hourly Wage Gap" = "black"),
+    name = "Legend"
+  ) +
+  labs(
+    title = "Figure 6. Mean Hourly Wage by Gender with Hourly Wage Gap (2019–2024)",
+    x = "Year",
+    y = "Mean Wage ($)"
+  ) +
+  scale_x_continuous(breaks = years_unique, labels = years_unique) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 8), legend.position = "bottom")
+```
+
+
+## Weekly Hours Worked and Gender Gaps (2019–2024)
+
+```{r Plot Mean Hours Worked, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Recalculate summary_df in case it's not defined above
+summary_df <- cpsmar_a %>%
+  group_by(year, gender) %>%
+  summarise(
+    Mean_Wage = round(mean(wage, na.rm=TRUE), 2),
+    Mean_Hours = round(mean(hours, na.rm=TRUE), 2),
+    .groups="drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from=gender,
+    values_from=c(Mean_Wage, Mean_Hours)
+  ) %>%
+  mutate(
+    `Wage_Diff ($)` = round(Mean_Wage_Male - Mean_Wage_Female, 2),
+    `Wage_Gap (%)` = round(100 * ((Mean_Wage_Male - Mean_Wage_Female) / Mean_Wage_Female), 1),
+    `Hours_Diff (hrs)` = round(Mean_Hours_Male - Mean_Hours_Female, 2)
+  ) %>%
+  select(year, Mean_Wage_Female, Mean_Wage_Male, `Wage_Diff ($)`, `Wage_Gap (%)`,
+         Mean_Hours_Female, Mean_Hours_Male, `Hours_Diff (hrs)`) %>%
+  mutate(year = as.character(year))
+
+# Plotting prep
+years_unique <- sort(unique(as.numeric(summary_df$year)))
+
+plot_data <- summary_df %>%
+  mutate(
+    year_num = as.numeric(year),
+    Hours_Gap_Diff = `Hours_Diff (hrs)`
+  )
+
+# Plot
+ggplot() +
+  geom_line(data=plot_data, aes(x=year_num, y=Mean_Hours_Female, color="Female"), size=1) +
+  geom_line(data=plot_data, aes(x=year_num, y=Mean_Hours_Male, color="Male"), size=1) +
+  geom_point(data=plot_data, aes(x=year_num, y=Mean_Hours_Female, color="Female"), size=2) +
+  geom_point(data=plot_data, aes(x=year_num, y=Mean_Hours_Male, color="Male"), size=2) +
+  geom_text(data=plot_data, aes(x=year_num, y=Mean_Hours_Female, label=Mean_Hours_Female), vjust=-0.5, size=3) +
+  geom_text(data=plot_data, aes(x=year_num, y=Mean_Hours_Male, label=Mean_Hours_Male), vjust=-0.5, size=3) +
+  
+  geom_line(data=plot_data, aes(x=year_num, y=Hours_Gap_Diff, color="Hours Worked Gap"), linetype="dotted", size=1) +
+  geom_point(data=plot_data, aes(x=year_num, y=Hours_Gap_Diff, color="Hours Worked Gap"), size=2) +
+  geom_text(data=plot_data, aes(x=year_num, y=Hours_Gap_Diff, label=paste0(Hours_Gap_Diff, " hrs")), vjust=-1, size=3) +
+
+  scale_color_manual(
+    values = c("Female"="#e78ac3", "Male"="#4eb3d3", "Hours Worked Gap"="black"),
+    name = "Legend"
+  ) +
+  labs(
+    title = "Figure 7. Mean Hours Worked by Gender with Hours Worked Gap (2019–2024)",
+    x = "Year",
+    y = "Mean Hours"
+  ) +
+  scale_x_continuous(breaks = years_unique, labels = years_unique) +
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.05))) +  # add bottom margin
+  theme_minimal() +
+  theme(axis.text.x = element_text(size=8), legend.position = "bottom")
+```
+
+
+## Documenting the Differences
+
+**Both men’s and women’s hourly wages increased** from 2019 to 2024, but men’s wages grew faster in dollar terms—widening the absolute gap from `$6.65` to `$7.26`. Still, the **percent wage gap narrowed** from `25.1%` to `21.2%`, meaning women’s wages grew faster proportionally.
+
+**Average weekly hours remained stable** for both genders. Men’s hours declined slightly (`44.56` → `43.81`), while women’s held steady around `42.2`. The **hours gap narrowed** from `2.17` to `1.64`.
+
+Together, these trends show that the **widening dollar gap is driven more by wage growth than hours worked**, underscoring continued challenges in closing the absolute earnings gap.
+
+
+## Career Earnings Trajectories by Year
+
+```{r Career Log Wage Profiles, echo=FALSE, results='asis', eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=5, out.width="90%", fig.align="center"}
+
+# Calculate average log-wage profiles by age and gender, separately by calendar year
+cef_by_year <- cpsmar_a %>%
+  filter(!is.na(lwage) & !is.na(age) & !is.na(gender) & !is.na(year)) %>%
+  mutate(age_centered = age - 23) %>%
+  group_by(year, age_centered, gender) %>%
+  summarise(avg_lwage = mean(lwage, na.rm = TRUE), .groups = "drop")
+
+# Create faceted plot with one panel per year
+figure7 <- ggplot(cef_by_year, aes(x = age_centered, y = avg_lwage, color = gender, linetype = gender)) +
+  geom_line(size=0.8) +
+  scale_linetype_manual(values = c("Female" = "solid", "Male" = "solid")) +
+  facet_wrap(~ year, ncol=3, scales="fixed") +
+  labs(
+    title = "Figure 8. Career log-wage profiles by calendar year (2019–2024)",
+    subtitle = "Career log-wage profiles for Men and Women by Calendar Year",
+    x = "Year",
+    y = "Average log wage",
+    color = "Gender",
+    linetype = "Gender"
+  ) +
+  scale_color_manual(values = c("Female" = "#e78ac3", "Male" = "#4eb3d3")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size=14, face="bold"),
+    plot.subtitle = element_text(size=10),
+    axis.text.x = element_text(size=7)
+  )
+
+print(figure7)
+```
+
+
+## Gender Wage Gap by Career Stage (2019–2024)
+
+```{r Table Gender Career Earnings Breakdown, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Step 1: Build cef_fvm_w from raw cpsmar_a data
+cef_fvm_w <- cpsmar_a %>%
+  filter(!is.na(lwage), !is.na(age), !is.na(gender), !is.na(year)) %>%
+  mutate(
+    age_centered = age - 23,
+    year = as.integer(year)
+  ) %>%
+  group_by(year, age_centered, gender) %>%
+  summarise(avg_lwage = mean(lwage, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Split and compute differences
+males <- cef_fvm_w %>%
+  filter(gender == "Male") %>%
+  rename(avg_lwage_male = avg_lwage) %>%
+  select(-gender)
+
+females <- cef_fvm_w %>%
+  filter(gender == "Female") %>%
+  rename(avg_lwage_female = avg_lwage) %>%
+  select(-gender)
+
+diff_fvm <- inner_join(males, females, by = c("year", "age_centered")) %>%
+  filter(age_centered <= 30) %>%
+  mutate(
+    diff = avg_lwage_male - avg_lwage_female,
+    age_group = cut(
+      age_centered,
+      breaks = c(-1, 10, 20, 30),
+      labels = c("1-10", "11-20", "21-30")
+    )
+  ) %>%
+  group_by(year, age_group) %>%
+  summarise(mean_diff = mean(diff) * 100, .groups = "drop") %>%
+  rename(
+    Year = year,
+    `Career Range` = age_group,
+    `Avg % Diff` = mean_diff
+  ) %>%
+  arrange(Year, `Career Range`)
+
+# Step 3: Compose heading + description
+output_list <- list(
+  tags$h3(style = "text-align:center;", "Table 3. Career Earning Differences, 2019–2024"),
+  tags$p(style = "text-align:center; max-width: 700px; margin: 0 auto 40px auto;",
+         "Each table shows the average difference in log-wages between men and women during the first 30 years of career, grouped by career range from 2019 to 2024.")
+)
+
+# Step 4: Add a styled subtable for each year
+for (yr in sort(unique(diff_fvm$Year))) {
+  sub_df <- diff_fvm %>% filter(Year == yr) %>% select(-Year)
+  
+  table_html <- kable(
+    sub_df,
+    format = "html",
+    col.names = c("Career Range", "Avg % Diff"),
+    digits = 2,
+    align = "cc"
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "condensed", "hover"),
+      full_width = FALSE,
+      position = "center",
+      font_size = 16
+    ) %>%
+    add_header_above(setNames(2, paste0("Year ", yr)), bold = TRUE, align = "c") %>%
+    HTML()
+  
+  output_list <- append(output_list, list(
+    div(style = "margin-bottom: 40px;", table_html)
+  ))
+}
+
+# Step 5: Wrap in scrollable container and render for ioslides
+scroll_box <- div(
+  style = "max-height: 400px; overflow-y: auto; overflow-x: hidden; padding-right: 20px; margin-bottom: 20px;",
+  tagList(output_list)
+)
+
+# Add custom CSS style for column spacing
+style_html <- HTML("
+  <style>
+    table.kable td, table.kable th {
+      padding-left: 25px;
+      padding-right: 25px;
+    }
+  </style>
+")
+
+# Wrap everything with the style tag included
+browsable(tagList(style_html, scroll_box))
+```
+
+
+## Trends in Wage Gaps by Career Stage (2019–2024)
+
+```{r Plot Changes in Average Percent Wage Differences, eval=TRUE, echo=FALSE, fig.width=12, fig.height=5, message=FALSE, warning=FALSE, out.width="90%", fig.align="center"}
+
+combined_diffs <- diff_fvm %>%
+  rename(
+    AvgPctDiff = `Avg % Diff`,
+    CareerRange = `Career Range`
+  )
+
+ggplot(combined_diffs, aes(x = Year, y = AvgPctDiff, color = CareerRange, group = CareerRange)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_text(aes(label = round(AvgPctDiff, 1)), vjust = -0.5, size = 3, show.legend = FALSE) +
+  scale_color_manual(values = c("1-10" = "#e78ac3", "11-20" = "#4eb3d3", "21-30" = "#66c2a5")) +
+  labs(
+    title = "Figure 9. Changes in Average Percent Wage Differences by Career Stage (2019–2024)",
+    x = "Year",
+    y = "Average Percent Difference",
+    color = "Career Range"
+  ) +
+  scale_x_continuous(breaks = sort(unique(combined_diffs$Year))) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+
+## Discussing the Gender Wage Gap Evolution
+
+From 2019 to 2024, **earnings rose steadily** for both men and women, but **gender gaps persisted across all career stages**. Log-wage profiles show men consistently earning more at nearly every point in the career span, with the gap remaining noticeable despite parallel upward trends.
+
+Career-stage comparisons reveal that **wage gaps widen with experience**—the **smallest differences appear in early careers** (`1–10 years`), while **mid- and late-career** gaps (`11–30 years`) are significantly larger. These patterns held throughout each year, with `peak disparities around 2020–2021`, followed by only slight declines by 2024.
+
+The line plot underscores this trend: while **early-career wage differences have narrowed modestly**, **more experienced workers continue to face entrenched disparities**. This suggests recent progress may benefit newer entrants, but **structural gaps remain unresolved** over the course of careers.
+
+## Modeling Career Log Wages with Quadratic Trend
+```{r Fitting Log Wage, eval=TRUE}
+
+formula <- y ~ x + I(x^2)
+
+figure9 <- figure7 +  
+  geom_smooth(
+    method=lm, 
+    formula=formula, 
+    aes(group=gender, color=gender), 
+    se=FALSE
+  ) +
+  stat_poly_eq(
+    data=subset(cef_by_year, gender=="Female"),
+    formula=formula,
+    aes(label=after_stat(eq.label), group=gender, color=gender),
+    parse=TRUE,
+    size=2.5,
+    fontface="bold",
+    label.x=0.93,
+    label.y=0.05
+  ) +
+  stat_poly_eq(
+    data=subset(cef_by_year, gender=="Male"),
+    formula=formula,
+    aes(label=after_stat(eq.label), group=gender, color=gender),
+    parse=TRUE,
+    size=2.5,
+    fontface="bold",
+    label.x=0.93,
+    label.y=0.17
+  ) +
+  labs(
+    title="Figure 10. Career log-wage profiles with quadratic fits",
+    x="Year",
+    y="Average log wage"
+  ) +
+  theme_minimal() +
+  theme(legend.position="bottom")
+```
+
+
+## Modeling Career Earnings with Quadratic Trends
+
+```{r Log Wage Profiles, echo=FALSE, fig.align='center', out.width='90%', eval = TRUE}
+figure9
+```
+
+
+## Educational Attainment Trends by Gender
+
+```{r Educational Differences, echo=FALSE, eval = TRUE}
+
+# Heading & explanatory text
+heading_html <- "
+<h3 style='text-align:center;'>Table 4. Educational Attainment by Gender, 2019–2024</h3>
+<p style='text-align:center; max-width: 700px; margin: 0 auto 40px auto;'>
+Each table shows the number of observations (N) and the average percent of individuals by gender who achieved a high school diploma, some college, or a college degree, for each year from 2019 to 2024. Percentages are calculated separately for men and women within each year.
+</p>
+
+<style>
+/* Add horizontal spacing between table cells */
+.table-ed-attainment td, .table-ed-attainment th {
+  padding-left: 20px;
+  padding-right: 20px;
+  text-align: center;
+}
+.table-ed-attainment {
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+"
+
+# Initialize combined HTML with heading
+tables_html <- heading_html
+
+years_unique <- sort(unique(cpsmar_a$year))
+
+for (yr in years_unique) {
+  
+  sub_df <- cpsmar_a %>%
+    filter(year == yr, !is.na(gender)) %>%
+    group_by(gender) %>%
+    summarise(
+      N = n(),
+      HSGrad = round(mean(HSGrad, na.rm=TRUE)*100, 1),
+      SomeColl = round(mean(SomeColl, na.rm=TRUE)*100, 1),
+      CollDeg = round(mean(CollDeg, na.rm=TRUE)*100, 1),
+      .groups="drop"
+    )
+  
+  tbl <- knitr::kable(
+    sub_df,
+    caption = paste0("Year ", yr),
+    col.names = c("Gender", "N", "HS Grad (%)", "Some College (%)", "College Degree (%)"),
+    align = "lrrrr",
+    format.args = list(big.mark = ",")
+  ) %>%
+    kableExtra::kable_styling(
+      bootstrap_options=c("striped", "condensed"),
+      font_size=14,
+      full_width=FALSE,
+      position="center"
+    )
+  
+  # Add custom table class for spacing
+  tbl <- gsub("<table", "<table class='table-ed-attainment'", tbl)
+  
+  tables_html <- paste0(
+    tables_html,
+    "<div style='margin: 0 auto 40px auto; max-width: 700px;'>",
+    tbl,
+    "</div>"
+  )
+}
+
+scrollable_box <- paste0(
+  "<div style='max-height: 400px; overflow-y: auto; padding-right: 10px;'>",
+  tables_html,
+  "</div>"
+)
+
+knitr::asis_output(scrollable_box)
+```
+
+
+## Demographic Patterns by Gender
+
+```{r Demographic Differences, echo=FALSE, eval = TRUE}
+
+
+# Heading & explanatory text
+heading_html <- "
+<h3 style='text-align:center;'>Table 5. Demographic Characteristics by Gender, 2019–2024</h3>
+<p style='text-align:center; max-width: 700px; margin: 0 auto 40px auto;'>
+Each table shows the number of observations (N) and the average percent of individuals by gender for key demographic characteristics — including race (Black, Hispanic), region (South), urban status (City), marital status (Married), and presence of children under 6 (Child &lt;6) — for each year from 2019 to 2024. Percentages are calculated separately for men and women within each year.
+</p>
+
+<style>
+/* Add horizontal spacing between table cells */
+.table-demo-attainment td, .table-demo-attainment th {
+  padding-left: 20px;
+  padding-right: 20px;
+  text-align: center;
+}
+.table-demo-attainment {
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+"
+
+# Initialize combined HTML with heading
+tables_html <- heading_html
+
+years_unique <- sort(unique(cpsmar_a$year))
+
+for (yr in years_unique) {
+  
+  sub_df <- cpsmar_a %>%
+    filter(year == yr, !is.na(gender)) %>%
+    group_by(gender) %>%
+    summarise(
+      N = n(),
+      Black = round(mean(Black, na.rm=TRUE)*100, 1),
+      Hispanic = round(mean(hisp, na.rm=TRUE)*100, 1),
+      South = round(mean(south, na.rm=TRUE)*100, 1),
+      City = round(mean(city, na.rm=TRUE)*100, 1),
+      Married = round(mean(married, na.rm=TRUE)*100, 1),
+      ChildU6 = round(mean(child_u6, na.rm=TRUE)*100, 1),
+      .groups="drop"
+    )
+  
+  tbl <- knitr::kable(
+    sub_df,
+    caption = paste0("Year ", yr),
+    col.names = c("Gender", "N", "Black (%)", "Hispanic (%)", "South (%)", "City (%)", "Married (%)", "Child <6 (%)"),
+    align = "lrrrrrrr",
+    format.args = list(big.mark = ",")
+  ) %>%
+    kableExtra::kable_styling(
+      bootstrap_options=c("striped", "condensed"),
+      font_size=14,
+      full_width=FALSE,
+      position="center"
+    )
+  
+  # Add custom table class for spacing
+  tbl <- gsub("<table", "<table class='table-demo-attainment'", tbl)
+  
+  tables_html <- paste0(
+    tables_html,
+    "<div style='margin: 0 auto 40px auto; max-width: 800px;'>",
+    tbl,
+    "</div>"
+  )
+}
+
+scrollable_box <- paste0(
+  "<div style='max-height: 400px; overflow-y: auto; padding-right: 10px;'>",
+  tables_html,
+  "</div>"
+)
+
+knitr::asis_output(scrollable_box)
+```
+
+
+## Gender Differences in Educational and Demographic Characteristics
+
+From 2019 to 2024, women consistently had **higher college completion rates** (`47–51%`) than men (`38–41%`), while men were more likely to stop at **high school graduation** (`27–28%` vs. `19–21%`). Men were also more often **married** (`66–68%` vs. `58%`) and had **young children at home** (`21–23%` vs. `18–19%`), reflecting traditional household roles. Women tended to **live in urban areas** more frequently, while men were slightly more concentrated in the South. Additionally, **Black representation was higher among women**, though Hispanic shares were similar. These patterns highlight that while women have an **educational edge**, men’s **household and demographic profiles** may still align more closely with higher-earning trajectories—helping to explain persistent wage disparities.
+
+
+## Adjusting for Education, Demographics, and Household Characteristics
+
+```{r Adjusting for Education, Demographics, and Household Characteristics, eval = TRUE}
+singles <- cpsmar_a %>%
+  filter(
+    married== 0,
+    child_u6== 0
+    )
+models <- list(
+  "Baseline"      = lm(lwage ~ female +
+                       age_centered + I(age_centered^2),
+                       data = cpsmar_a),
+  "Add Education" = lm(lwage ~ female +
+                       age_centered + I(age_centered^2) + CollDeg + SomeColl + HSGrad,
+                       data = cpsmar_a),
+  "Add Person"    = lm(lwage ~ female +
+                       age_centered + I(age_centered^2) + CollDeg + SomeColl + HSGrad +
+                       Black + hisp + south + city,
+                       data = cpsmar_a),
+  "Add Household" = lm(lwage ~ female +
+                       age_centered + I(age_centered^2) + CollDeg + SomeColl + HSGrad +
+                       Black + hisp + south + city +
+                       married + child_u6,
+                       data = cpsmar_a),
+  "Only Singles"  = lm(lwage ~ female +
+                       age_centered + I(age_centered^2) + CollDeg + SomeColl + HSGrad +
+                       Black + hisp + south + city, 
+                       data = singles)
+)
+```
+
+
+## OLS Estimates of the Gender Wage Gap with Sequential Controls
+
+```{r OLS Estimates of the Gender Wage Gap with Sequential Controls, eval = TRUE}
+cm <- c(
+  'female'            = 'Female',
+  'age_centered'      = 'Age',
+  'I(age_centered^2)' = 'Age$^2$',
+  '(Intercept)'       = 'Constant'
+)
+gm <-  tibble::tribble(
+  ~raw, ~clean, ~fmt,
+  "nobs", "$N$", 0,
+  "r.squared", "$R^2$", 2
+)
+rows <- tribble(~term, ~Baseline, ~Add_Education, ~Add_Person, ~Add_Household, ~Only_Singles,
+  'Education controls',   ' ',         'X',           'X',          'X',           'X',
+  'Demographic controls', ' ',         ' ',           'X',          'X',           'X',
+  'Household controls',   ' ',         ' ',           ' ',          'X',           'X'
+)
+attr(rows, 'position') <- c(9, 10, 11) # Positions where you want these rows to appear
+
+table6 <- modelsummary(
+  models,
+  add_rows = rows,
+  coef_map = cm,
+  gof_map = gm,
+  vcov = c("HC1","HC1","HC1","HC1","HC1"),
+  title = "Table 6. OLS estimates of the gender wage gap",
+  notes = "Robust standard errors in parentheses.",
+  escape = FALSE
+  )
+```
+
+
+## Sequential Controls and the Gender Pay Gap
+
+<div class="table-4">
+```{r 2019-2024 Gender Wage Gap Table with Controls, echo=FALSE, eval = TRUE}
+table6
+```
+</div>
+
+
+## Estimating Yearly Gender Pay Gaps With Controls
+
+```{r Table Gender Wage Gap Changes with Controls, echo=FALSE, eval = TRUE}
+
+
+years_unique <- sort(unique(cpsmar_a$year))
+female_gaps <- tibble()
+
+for (yr in years_unique) {
+  df_sub <- cpsmar_a %>% filter(year == yr)
+  m <- lm(
+    lwage ~ female + age_centered + I(age_centered^2) +
+            CollDeg + SomeColl + HSGrad +
+            Black + hisp + south + city +
+            married + child_u6,
+    data = df_sub
+  )
+  coef <- broom::tidy(m, conf.int=TRUE)
+  female_row <- coef %>% filter(term=="female")
+  female_gaps <- bind_rows(female_gaps, tibble(
+    Year=yr,
+    Estimate_pct=100*female_row$estimate,
+    conf.low_pct=100*female_row$conf.low,
+    conf.high_pct=100*female_row$conf.high
+  ))
+}
+
+# Table of female wage gaps by year
+kable(female_gaps, digits=2,
+      col.names=c("Year", "Estimated Gap (%)", "Lower CI", "Upper CI"),
+      caption="Table 7. Estimated Female Wage Gaps by Year") %>%
+  kable_styling(bootstrap_options=c("striped","condensed"), full_width=FALSE, font_size=14, position="center")
+```
+
+
+## Estimated Female Wage Gap with Controls (2019–2024)
+
+```{r Plot Gender Wage Gap Changed with Controls, eval=TRUE, echo=FALSE, fig.width=12, fig.height=5, message=FALSE, warning=FALSE, out.width="90%", fig.align="center"}
+
+# Plot the wage gaps over time
+ggplot(female_gaps, aes(x=Year, y=Estimate_pct)) +
+  geom_line(color="#e78ac3", size=1) +
+  geom_point(size=2, color="#e78ac3") +
+  geom_ribbon(aes(ymin=conf.low_pct, ymax=conf.high_pct), fill="#e78ac3", alpha=0.2) +
+  geom_text(aes(label=round(Estimate_pct,1)), vjust=-0.7, size=3) +
+  labs(
+    title="Figure 11. Estimated Female Wage Gap after Controls with 95% CI",
+    x="Year",
+    y="Estimated Wage Gap (%)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+
+
+## Documenting the findings     
+
+Analysis of the March CPS data from 2019 to 2024 reveals a **persistent and substantial gender wage gap**, even after accounting for key explanatory factors. **Baseline regression estimates** indicate that women earn approximately `18%` less than men on average. Interestingly, the wage gap **widens** to around `25%` when **educational attainment controls are introduced**, suggesting that women’s generally higher levels of education do not mitigate the gap and may instead reveal underlying disparities once education is considered. **Adding demographic characteristics**,race, ethnicity, region, and urbanicity,**reduces the gap slightly** to approximately `24%`, while **including household factors** such as marital status and presence of young children **brings the estimated gap down further** to around `22%`. **Year-by-year adjusted estimates show a consistent gap between** `22%` **and** `24%`, with confidence intervals indicating that these differences are **statistically significant and stable over time**. These findings highlight that while **education, demographics, and household context explain part of the wage gap**, **they do not account for the majority of the persistent earnings disparity** between men and women, underscoring the **continued existence of structural inequalities in labor market outcomes**.
+
+
+# Conclusion 
+
+
+## Summary
+
+This project examined the gender wage gap using March CPS data from 2019 to 2024, focusing on full-time workers aged 23 to 62 with positive earnings. Across all years pooled, a **raw wage gap of** `18%` was observed, which **widened to** `25%` **when controlling for education**—reflecting **women's higher educational attainment**. **Incorporating demographic controls** (race, region, urbanicity) and **household factors** (marital status, young children) **modestly reduced the gap to** `22.7%`. Among **single individuals without young children**, the wage gap **narrowed further to** `14.1%`, highlighting how **caregiving responsibilities contribute to wage inequality**. **Year-by-year adjusted estimates consistently revealed a persistent gender wage gap near `22–24%`**, with only modest variation and overlapping confidence intervals. Over the six-year period, **women consistently had higher rates of college attainment**, while **men were more likely to be married and have young children**. Overall, the analysis shows that even after adjusting for observable characteristics, a **sizable wage gap remains**, pointing to **structural or unmeasured factors**—including **workplace bias, occupational sorting, or time penalties for caregiving** that continue to disadvantage women in the labor market.
+
+
+# Appendix 
+
+
+## Data documentation 
+
+<div class="appendix-code">
+```{r Documentation, eval = TRUE}
+# Define the variables and their descriptions
+variables <- data.frame(
+  Variable = c(
+    "age", 
+    "earnings", 
+    "hours", 
+    "race", 
+    "marital", 
+    "HSGrad", 
+    "SomeColl", 
+    "CollDeg", 
+    "region", 
+    "female", 
+    "hisp", 
+    "fulltime"
+    ),
+  Definition = c(
+    "years; capped at 85",
+    " wage * hours * weeks; greater than 0",
+    "Weekly hours worked; at least 36",
+    "respondent’s race (1 = White only, 2 = Black only, 3 = AI only, 4 = Asian only, 5 = Hawaiian/Pacific Islander only (HP), 6 = White-Black, 7 = White-AI, 8 = White-Asian, 9 = White-HP, 11 = Black-Asian, 12 = Black-HP, 13 = AI-Asian, 14 = AI-HP, 15 = Asian-HP, 16 = White-Black-AI, 17 = White-Black-Asian, 18 = White-Black-HP, 19 = White-AI-Asian, 20 = White-AI-HP, 21 = White-Asian-HP, 22 = Black-AI-Asian, 23 = White-Black-AI-Asian, 24 = White-AI-Asian-HP, 25 = White-Black-AI-Asian-HP, 25 = Other 3 race comb., 26 = Other 4 or 5 race comb.)",
+    "marital status (1 = Married civilian, 2 = Married AF, 3 = Married absent, 4 = Widowed, 5 = Divorced, 6 = Separated, 7 = Never married)",
+    "= 1, if High School Graduate",
+    "= 1, if Some College",
+    "= 1, if College Degree",
+    "household region (1 = Northeast, 2 = Midwest, 3 = South, 4 = West)",
+    "= 1 if Female",
+    "= 1 if Hispanic, Spanish, or Latino",
+    "= 1 if Full-time worker"
+  )
+)
+```
+</div>
+
+
+## List of main variables with definitions 
+
+This is a list of the main variables used in this project with their definitions. 
+
+<div class="appendix-table">
+```{r var_doc_table, echo=FALSE, eval = TRUE}
+# Render the table
+knitr::kable(variables, format = "simple", 
+      col.names = c("Variable", "Definition"))
+```
+</div>
