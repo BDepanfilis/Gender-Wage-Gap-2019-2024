@@ -1,0 +1,26 @@
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data: keep README and placeholder only
+data/*
+!data/README.md
+!data/.gitkeep
+
+# Generated outputs
+outputs/*
+!outputs/tables/
+!outputs/tables/*.csv
+!outputs/.gitkeep
+
+dashboard/*
+!dashboard/*.png
+
+# Big binaries
+*.pbix
