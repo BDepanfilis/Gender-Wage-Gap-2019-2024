@@ -11,6 +11,7 @@ Code is in **R**, visuals are generated in R and surfaced on a simple site (GitH
 
 - **Interactive dashboard (Power BI)**: *(publish-to-web link)*  
   https://app.powerbi.com/view?r=eyJrIjoiYWIyZGVmMjUtYzc3My00OTAzLTgzODQtZWMyMzFjZjYyMDEzIiwidCI6ImE4MjE2YzFlLTRkNjMtNDM1Mi04YzNiLTUwZmExZjE0NzViMSIsImMiOjZ9
+  **GitHub Pages**: https://bdepanfilis.github.io/Gender-Wage-Gap-2019-2024/
 - **Key figures**: `dashboard/` (PNG)  
   **Tables**: `outputs/tables/` (CSV)
 
